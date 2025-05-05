@@ -150,8 +150,8 @@ class _ChessBoardState extends State<ChessBoard> {
     validMoves = List.generate(8, (_) => List.filled(8, false));
     positionHistory.clear();
     _moveHistory.clear();
-    capturedByRed.clear();
-    capturedByBlack.clear();
+    capturedByRed = [];
+    capturedByBlack = [];
     halfMoveClock = 0;
     gameResult = null;
     
@@ -305,13 +305,79 @@ class _ChessBoardState extends State<ChessBoard> {
     return isValid && (!checkSafety || _simulateMoveSafety(fromRow, fromCol, toRow, toCol, isRed));
   }
 
+  void _handleTileTap(int row, int col) {
+    if (gameOver) return;
+
+    setState(() {
+      if (selectedRow == null) {
+        if (board[row][col].isNotEmpty && _isRedPiece(board[row][col]) == isRedTurn) {
+          selectedRow = row;
+          selectedCol = col;
+          validMoves = List.generate(8, (i) => 
+            List.generate(8, (j) => _validateMove(row, col, i, j)));
+        }
+      } else {
+        if (validMoves[row][col]) {
+          final moveNotation = _getMoveNotation(selectedRow!, selectedCol!, row, col);
+          _performMove(selectedRow!, selectedCol!, row, col);
+          
+          if (isRedTurn) {
+            _moveHistory.add(moveNotation);
+          } else {
+            if (_moveHistory.isNotEmpty) {
+              _moveHistory[_moveHistory.length - 1] += '\n... $moveNotation';
+            } else {
+              _moveHistory.add('... $moveNotation');
+            }
+          }
+          
+          if (_isCheckmate(!isRedTurn)) {
+            gameResult = 'Chiếu hết! ${isRedTurn ? 'Đỏ thắng' : 'Đen thắng'}';
+            gameOver = true;
+          } else if (_isStalemate(isRedTurn)) {
+            gameResult = 'Hòa do hết nước đi!';
+            gameOver = true;
+          } else if (_isThreefoldRepetition()) {
+            gameResult = 'Hòa do lặp nước 3 lần!';
+            gameOver = true;
+          } else if (_isFiftyMoveRule()) {
+            gameResult = 'Hòa theo luật 50 nước!';
+            gameOver = true;
+          }
+          
+          isRedTurn = !isRedTurn;
+          _startClock();
+        }
+        selectedRow = null;
+        validMoves = List.generate(8, (_) => List.filled(8, false));
+      }
+    });
+  }
+
   void _performMove(int fromRow, int fromCol, int toRow, int toCol, {bool checkSafety = false}) async {
     final piece = board[fromRow][fromCol];
     final isRed = _isRedPiece(piece);
     final isPawn = piece == '♙' || piece == '♟';
     final targetPiece = board[toRow][toCol];
 
-    if (targetPiece.isNotEmpty) {
+    // Xử lý en passant
+    bool isEnPassant = false;
+    if (isPawn && _validateEnPassant(fromRow, fromCol, toRow, toCol, isRed)) {
+      isEnPassant = true;
+      int capturedRow = isRed ? toRow + 1 : toRow - 1;
+      String captured = board[capturedRow][toCol];
+      if (captured.isNotEmpty && _isRedPiece(captured) != isRed) {
+        if (_isRedPiece(captured)) {
+          capturedByBlack.add(captured);
+        } else {
+          capturedByRed.add(captured);
+        }
+      }
+      board[capturedRow][toCol] = '';
+    }
+
+    // Xử lý ăn quân thông thường (không phải en passant)
+    if (!isEnPassant && targetPiece.isNotEmpty && _isRedPiece(targetPiece) != isRed) {
       if (_isRedPiece(targetPiece)) {
         capturedByBlack.add(targetPiece);
       } else {
@@ -319,7 +385,7 @@ class _ChessBoardState extends State<ChessBoard> {
       }
     }
 
-    halfMoveClock = (isPawn || targetPiece.isNotEmpty) ? 0 : halfMoveClock + 1;
+    halfMoveClock = (isPawn || (targetPiece.isNotEmpty && _isRedPiece(targetPiece) != isRed) || isEnPassant) ? 0 : halfMoveClock + 1;
     
     final currentPosition = {
       'board': board.map((row) => List<String>.from(row)).toList(),
@@ -333,12 +399,13 @@ class _ChessBoardState extends State<ChessBoard> {
       if ((toCol - fromCol).abs() == 2) _performCastling(fromRow, fromCol, toCol);
     } 
     else if (isPawn) {
-      if (_validateEnPassant(fromRow, fromCol, toRow, toCol, isRed)) {
-        board[enPassantSquare[0]!][enPassantSquare[1]!] = '';
+      if (!isEnPassant) {
+        enPassantSquare = (toRow - fromRow).abs() == 2 
+            ? [(fromRow + toRow) ~/ 2, toCol]
+            : [null, null];
+      } else {
+        enPassantSquare = [null, null];
       }
-      enPassantSquare = (toRow - fromRow).abs() == 2 
-          ? [(fromRow + toRow) ~/ 2, toCol]
-          : [null, null];
     } else {
       enPassantSquare = [null, null];
     }
@@ -366,45 +433,17 @@ class _ChessBoardState extends State<ChessBoard> {
 
     _updateCastlingRights(fromRow, fromCol);
     _checkDrawConditions();
-    
-    final moveNotation = _getMoveNotation(fromRow, fromCol, toRow, toCol);
-    if (isRedTurn) {
-      _moveHistory.add(moveNotation);
-    } else {
-      if (_moveHistory.isNotEmpty) {
-        _moveHistory[_moveHistory.length - 1] += '\n$moveNotation';
-      } else {
-        _moveHistory.add('... $moveNotation');
-      }
-    }
   }
 
   String _getMoveNotation(int fromRow, int fromCol, int toRow, int toCol) {
     final piece = board[fromRow][fromCol];
-    final pieceName = _getPieceName(piece);
     final from = _getChessNotation(fromRow, fromCol);
     final to = _getChessNotation(toRow, toCol);
-    return '$pieceName $from → $to';
-  }
-
-  String _getPieceName(String symbol) {
-    final isRed = _isRedPiece(symbol);
-    final color = isRed ? 'Đỏ' : 'Đen';
-    switch (symbol) {
-      case '♔': return 'Vua $color';
-      case '♕': return 'Hậu $color';
-      case '♖': return 'Xe $color';
-      case '♗': return 'Tượng $color';
-      case '♘': return 'Mã $color';
-      case '♙': return 'Tốt $color';
-      case '♚': return 'Vua $color';
-      case '♛': return 'Hậu $color';
-      case '♜': return 'Xe $color';
-      case '♝': return 'Tượng $color';
-      case '♞': return 'Mã $color';
-      case '♟': return 'Tốt $color';
-      default: return '';
-    }
+    
+    if (piece == '♙' && toRow == 0) return '$from->$to=♕';
+    if (piece == '♟' && toRow == 7) return '$from->$to=♛';
+    
+    return '$from->$to';
   }
 
   Future<void> _showPromotionDialog(int row, int col) async {
@@ -659,12 +698,10 @@ class _ChessBoardState extends State<ChessBoard> {
      title: Column(
   children: [
     Text(
-      gameResult ??
-          (gameOver
-              ? 'Kết thúc trận đấu'
-              : isRedTurn
-                  ? 'Lượt Đỏ${redInCheck ? ' (CHIẾU)' : ''}'
-                  : 'Lượt Đen${blackInCheck ? ' (CHIẾU)' : ''}'),
+      gameResult ?? 
+      (gameOver ? 'Kết thúc trận đấu' :
+      isRedTurn ? 'Lượt Đỏ${redInCheck ? ' (CHIẾU)' : ''}' 
+                : 'Lượt Đen${blackInCheck ? ' (CHIẾU)' : ''}'),
       style: Theme.of(context).textTheme.titleLarge,
     ),
     Text(
@@ -673,7 +710,6 @@ class _ChessBoardState extends State<ChessBoard> {
     ),
   ],
 ),
-
         centerTitle: true,
         actions: [
           IconButton(
@@ -832,6 +868,7 @@ class _ChessBoardState extends State<ChessBoard> {
                       padding: const EdgeInsets.all(8),
                       itemCount: _moveHistory.length,
                       itemBuilder: (context, index) {
+                        final moves = _moveHistory[index].split('\n');
                         return Container(
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           decoration: BoxDecoration(
@@ -850,13 +887,13 @@ class _ChessBoardState extends State<ChessBoard> {
                                     color: Colors.blueGrey[800],
                                   ),
                                 ),
-                                ..._moveHistory[index].split('\n').map((move) => Padding(
+                                ...moves.map((move) => Padding(
                                   padding: const EdgeInsets.only(left: 16, top: 4),
                                   child: Text(
-                                    '• $move',
+                                    '• ${move.startsWith('...') ? 'Đen: ${move.substring(4)}' : 'Đỏ: $move'}',
                                     style: TextStyle(
                                       fontSize: 14,
-                                      color: move.startsWith('Tốt Đỏ') ? Colors.red[700] : Colors.blueGrey[800],
+                                      color: Colors.blueGrey[800],
                                     ),
                                   ),
                                 )).toList(),
@@ -868,15 +905,6 @@ class _ChessBoardState extends State<ChessBoard> {
                     ),
                   ),
                   const Divider(height: 2, color: Colors.grey),
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      children: [
-                        _buildCapturedPieces('Đỏ đã ăn', capturedByRed, Colors.red),
-                        _buildCapturedPieces('Đen đã ăn', capturedByBlack, Colors.black),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -923,39 +951,6 @@ class _ChessBoardState extends State<ChessBoard> {
                   ),
                   child: const Icon(Icons.handshake),
                 ),
-    );
-  }
-
-  Widget _buildCapturedPieces(String title, List<String> pieces, Color titleColor) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        child: Column(
-          children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: titleColor,
-                fontSize: 14,
-              ),
-            ),
-            Expanded(
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: pieces.map((piece) => Text(
-                  piece,
-                  style: TextStyle(
-                    fontSize: 20,
-                    color: _isRedPiece(piece) ? Colors.red : Colors.black,
-                  ),
-                )).toList(),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1021,43 +1016,5 @@ class _ChessBoardState extends State<ChessBoard> {
     final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
     final remaining = (seconds % 60).toString().padLeft(2, '0');
     return '$minutes:$remaining';
-  }
-
-  void _handleTileTap(int row, int col) {
-    if (gameOver) return;
-
-    setState(() {
-      if (selectedRow == null) {
-        if (board[row][col].isNotEmpty && _isRedPiece(board[row][col]) == isRedTurn) {
-          selectedRow = row;
-          selectedCol = col;
-          validMoves = List.generate(8, (i) => 
-            List.generate(8, (j) => _validateMove(row, col, i, j)));
-        }
-      } else {
-        if (validMoves[row][col]) {
-          _performMove(selectedRow!, selectedCol!, row, col);
-          
-          if (_isCheckmate(!isRedTurn)) {
-            gameResult = 'Chiếu hết! ${isRedTurn ? 'Đỏ thắng' : 'Đen thắng'}';
-            gameOver = true;
-          } else if (_isStalemate(isRedTurn)) {
-            gameResult = 'Hòa do hết nước đi!';
-            gameOver = true;
-          } else if (_isThreefoldRepetition()) {
-            gameResult = 'Hòa do lặp nước 3 lần!';
-            gameOver = true;
-          } else if (_isFiftyMoveRule()) {
-            gameResult = 'Hòa theo luật 50 nước!';
-            gameOver = true;
-          }
-          
-          isRedTurn = !isRedTurn;
-          _startClock();
-        }
-        selectedRow = null;
-        validMoves = List.generate(8, (_) => List.filled(8, false));
-      }
-    });
   }
 }
